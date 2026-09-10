@@ -59,8 +59,8 @@ fun calculateFoldVisualParams(state: FoldState): FoldVisualParams {
         0f
     }
 
-    // Physical 3D folding angle: 100% physically matched to the fold: -(180° - angle)
-    val rotationYLeft = -(180f - angle)
+    // 3D folding angle: softened to half of physical fold: -((180° - angle) * 0.5f)
+    val rotationYLeft = -((180f - angle) * 0.5f)
 
     return FoldVisualParams(
         innerLeftMaxBlurPx = innerLeftMaxBlurPx,
