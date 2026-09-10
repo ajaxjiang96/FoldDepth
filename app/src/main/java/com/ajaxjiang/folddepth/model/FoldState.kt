@@ -74,8 +74,8 @@ fun calculateFoldVisualParams(state: FoldState): FoldVisualParams {
     val stretchIntensity = 0.55f // Up to 55% horizontal elongation at full fold
     val scaleXLeft = 1.0f + stretchIntensity * easedClosed
 
-    // Subtle crease ambient occlusion shadow near the hinge as the angle deepens
-    val creaseShadowAlpha = 0.35f * easedClosed
+    // Seam continuity: zero crease shadow at the hinge seam so there is no color difference
+    val creaseShadowAlpha = 0f
 
     return FoldVisualParams(
         innerLeftMaxBlurPx = innerLeftMaxBlurPx,

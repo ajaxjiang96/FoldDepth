@@ -131,30 +131,11 @@ fun FoldDepthDemo(
                     .fillMaxHeight()
                     .background(Color.Black),
             ) {
-                val verticalFeatherBrush = remember(visualParams.wipeAmount) {
-                    val featherFraction = (0.12f * visualParams.wipeAmount).coerceIn(0f, 0.2f)
-                    Brush.verticalGradient(
-                        colorStops = arrayOf(
-                            0.0f to Color.Transparent,
-                            featherFraction to Color.Black,
-                            (1.0f - featherFraction) to Color.Black,
-                            1.0f to Color.Transparent,
-                        )
-                    )
-                }
+                val wipeAmount = visualParams.wipeAmount
 
-                // 1. Base 3D Rotating & Stretching Wallpaper Panel
-                // Cross-fades with the blur layer so sharp pixels and sharp silhouette edges
-                // do NOT show through underneath the blur.
-                val sharpBaseAlphaStops = remember(visualParams.wipeAmount) {
-                    Array(21) { i ->
-                        val u = i / 20f // 0.0 at left, 1.0 at hinge
-                        val blurArea = calculateAppleBlurArea(u, visualParams.wipeAmount)
-                        val sharpAlpha = (1.0f - blurArea).coerceIn(0f, 1f)
-                        u to Color.Black.copy(alpha = sharpAlpha)
-                    }
-                }
-
+                // 1. Base Sharp Wallpaper Panel
+                // Cross-fades linearly towards the left so sharp pixels don't show under heavy blur,
+                // and reaches STRICTLY 1.0 (100% opaque & sharp) at the center seam (x = size.width).
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -166,15 +147,17 @@ fun FoldDepthDemo(
                         }
                         .drawWithContent {
                             drawContent()
-                            if (visualParams.wipeAmount > 0.005f) {
-                                // Fade out sharp base layer towards the left as blur takes over
+                            if (wipeAmount > 0.005f) {
+                                // Strictly linear fade: 1.0 - wipeAmount at x = 0, exactly 1.0 at center seam
                                 drawRect(
-                                    brush = Brush.horizontalGradient(colorStops = sharpBaseAlphaStops),
-                                    blendMode = BlendMode.DstIn,
-                                )
-                                // Soften top and bottom edges into black (Apple edge feathering)
-                                drawRect(
-                                    brush = verticalFeatherBrush,
+                                    brush = Brush.horizontalGradient(
+                                        colors = listOf(
+                                            Color.Black.copy(alpha = (1.0f - wipeAmount).coerceIn(0f, 1f)),
+                                            Color.Black, // 100% opaque at center seam!
+                                        ),
+                                        startX = 0f,
+                                        endX = size.width,
+                                    ),
                                     blendMode = BlendMode.DstIn,
                                 )
                             }
@@ -187,20 +170,11 @@ fun FoldDepthDemo(
                     )
                 }
 
-                // 2. Hardware-accelerated Apple Non-Linear Gradient Blur Overlay
-                // STATIONARY IN SCREEN SPACE ON TOP OF ROTATION: Does NOT rotate with the panel!
-                // Uses TileMode.DECAL to naturally diffuse edges outward into transparency,
-                // and vertical edge feathering so top and bottom edges are soft and atmospheric.
-                if (Build.VERSION.SDK_INT >= 31 && visualParams.innerLeftMaxBlurPx > 0.3f && visualParams.wipeAmount > 0.005f) {
-                    val blurAlphaStops = remember(visualParams.wipeAmount) {
-                        Array(21) { i ->
-                            val u = i / 20f // 0.0 at left, 1.0 at hinge
-                            val blurArea = calculateAppleBlurArea(u, visualParams.wipeAmount)
-                            val alpha = blurArea.coerceIn(0f, 1f)
-                            u to Color.Black.copy(alpha = alpha)
-                        }
-                    }
-
+                // 2. Linear Gradient Blur Overlay
+                // STATIONARY IN SCREEN SPACE ON TOP OF ROTATION:
+                // From left to right: strictly linear decrease, reaching EXACTLY 0.0 at the center seam!
+                // TileMode.DECAL allows blur to naturally diffuse into outer transparent space.
+                if (Build.VERSION.SDK_INT >= 31 && visualParams.innerLeftMaxBlurPx > 0.3f && wipeAmount > 0.005f) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -211,25 +185,27 @@ fun FoldDepthDemo(
                                     .createBlurEffect(
                                         visualParams.innerLeftMaxBlurPx,
                                         visualParams.innerLeftMaxBlurPx,
-                                        Shader.TileMode.DECAL, // Softly bleed outside boundaries into transparency!
+                                        Shader.TileMode.DECAL,
                                     )
                                     .asComposeRenderEffect()
                             }
                             .drawWithContent {
                                 drawContent()
-                                // Apple non-linear alpha mask in stationary screen space
+                                // Strictly linear gradient mask from left (wipeAmount) to center seam (0.0):
                                 drawRect(
-                                    brush = Brush.horizontalGradient(colorStops = blurAlphaStops),
-                                    blendMode = BlendMode.DstIn,
-                                )
-                                // Soft vertical edge feathering to dissolve top/bottom edges
-                                drawRect(
-                                    brush = verticalFeatherBrush,
+                                    brush = Brush.horizontalGradient(
+                                        colors = listOf(
+                                            Color.Black.copy(alpha = wipeAmount.coerceIn(0f, 1f)),
+                                            Color.Transparent, // Strictly 0.0 alpha at the center seam!
+                                        ),
+                                        startX = 0f,
+                                        endX = size.width,
+                                    ),
                                     blendMode = BlendMode.DstIn,
                                 )
                             },
                     ) {
-                        // Renders the rotating content into the screen-space blur filter
+                        // Renders the rotating & stretching content into the screen-space blur filter
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -249,52 +225,26 @@ fun FoldDepthDemo(
                     }
                 }
 
-                // 3. Apple Ambient Crease Shading & Deep Exposure Darkening
-                // STATIONARY IN SCREEN SPACE ON TOP OF ROTATION: Does NOT rotate with the panel!
-                // Driven by Apple's formula: smoothstep(1.3, 0.9, blurArea)
-                // Deeply immerses the blurred left side into the pure black background void.
-                if (visualParams.wipeAmount > 0.005f) {
-                    val exposureDarknessStops = remember(visualParams.wipeAmount, visualParams.creaseShadowAlpha) {
-                        Array(21) { i ->
-                            val u = i / 20f // 0.0 at left, 1.0 at hinge
-                            val rawBlurArea = calculateAppleBlurArea(u, visualParams.wipeAmount)
-                            val shade = calculateAppleShade(rawBlurArea)
-
-                            // Crease ambient shadow near the hinge (u in 0.82 .. 1.0)
-                            val creaseShade = if (u >= 0.82f) {
-                                val creaseT = (u - 0.82f) / 0.18f
-                                1.0f - (visualParams.creaseShadowAlpha * smoothstep(creaseT))
-                            } else {
-                                1.0f
-                            }
-
-                            val totalShade = (shade * creaseShade).coerceIn(0f, 1f)
-                            val blackAlpha = 1.0f - totalShade
-                            u to Color.Black.copy(alpha = blackAlpha)
-                        }
-                    }
-
-                    // Stationary screen-space darkening overlay
+                // 3. Linear Exposure Darkening Overlay
+                // STATIONARY IN SCREEN SPACE ON TOP OF ROTATION:
+                // Leftmost edge (x = 0): maximum darkening (sinks into black void)
+                // Center seam (x = size.width): strictly 0.0 alpha (Color.Transparent) -> ZERO color difference!
+                // Strictly linear decrease from left to right.
+                if (wipeAmount > 0.005f) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .drawWithContent {
                                 drawContent()
-                                // Horizontal exposure darkening & crease shadow in screen space
+                                // Strictly linear darkening from left (0.65 * wipeAmount) to center seam (0.0):
                                 drawRect(
-                                    brush = Brush.horizontalGradient(colorStops = exposureDarknessStops),
-                                )
-                                // Apple subtle vertical vignette in screen space
-                                drawRect(
-                                    brush = Brush.verticalGradient(
+                                    brush = Brush.horizontalGradient(
                                         colors = listOf(
-                                            Color.Black.copy(alpha = 0.35f * visualParams.wipeAmount),
-                                            Color.Transparent,
-                                            Color.Transparent,
-                                            Color.Black.copy(alpha = 0.35f * visualParams.wipeAmount),
+                                            Color.Black.copy(alpha = 0.65f * wipeAmount),
+                                            Color.Transparent, // Strictly 0.0 at center seam: NO color difference!
                                         ),
-                                        startY = 0f,
-                                        endY = size.height,
+                                        startX = 0f,
+                                        endX = size.width,
                                     ),
                                 )
                             },
