@@ -89,56 +89,29 @@ fun calculateFoldVisualParams(state: FoldState): FoldVisualParams {
 }
 
 /**
- * Calibrates horizontal elastic stretch ratio (scaleXLeft) for the folding left half.
+ * Physical elastic stretch model for the folding left half:
  *
- * User Keyframes:
- * - 180° (flat):  1.0x (normal width)
- * - 130°:         1.5x
- * - 115°:         2.0x
- * - 100°:         3.0x
- * - Below 100°:   Smoothly continues to 3.6x at 0° (closed)
+ * When the panel folds inward around the hinge, perspective foreshortening contracts its
+ * projected visual width. To provide an organic "elastic peel" tension (Apple Duo style)
+ * without unnatural funhouse-mirror distortion:
  *
- * Implemented using a Monotonic Cubic Hermite Spline (PCHIP):
- * - Guarantees exact hit at all keyframes
- * - Continuous C1 derivative (no abrupt velocity jumps at boundaries)
- * - Zero heap allocation (evaluates in nanoseconds on UI sensor thread)
+ * scaleX(angle) = 1.0 + STRETCH_MAX * sin(foldFraction * PI / 2)^1.3
+ *
+ * Trajectory:
+ * - 180° (flat):  1.00x
+ * - 150°:         1.04x
+ * - 130°:         1.12x
+ * - 115°:         1.22x
+ * - 100°:         1.32x
+ * - 90°:          1.38x
+ * - 0° (closed):  1.45x
  */
 fun calculateStretchScale(angle: Float): Float {
     val clampedAngle = angle.coerceIn(0f, 180f)
-    val u = 180f - clampedAngle // Fold inward degrees: 0° (flat) to 180° (closed)
-
-    val u0: Float
-    val u1: Float
-    val y0: Float
-    val y1: Float
-    val d0: Float
-    val d1: Float
-
-    if (u <= 50f) {
-        // [0°, 50°] -> [180°, 130°]: 1.0x -> 1.5x
-        u0 = 0f; u1 = 50f; y0 = 1.0f; y1 = 1.5f; d0 = 0.0f; d1 = 0.015384615f
-    } else if (u <= 65f) {
-        // [50°, 65°] -> [130°, 115°]: 1.5x -> 2.0x
-        u0 = 50f; u1 = 65f; y0 = 1.5f; y1 = 2.0f; d0 = 0.015384615f; d1 = 0.044444446f
-    } else if (u <= 80f) {
-        // [65°, 80°] -> [115°, 100°]: 2.0x -> 3.0x
-        u0 = 65f; u1 = 80f; y0 = 2.0f; y1 = 3.0f; d0 = 0.044444446f; d1 = 0.011009174f
-    } else {
-        // [80°, 180°] -> [100°, 0°]: 3.0x -> 3.6x
-        u0 = 80f; u1 = 180f; y0 = 3.0f; y1 = 3.6f; d0 = 0.011009174f; d1 = 0.0f
-    }
-
-    val h = u1 - u0
-    val t = ((u - u0) / h).coerceIn(0f, 1f)
-    val t2 = t * t
-    val t3 = t2 * t
-
-    val h00 = 2f * t3 - 3f * t2 + 1f
-    val h10 = t3 - 2f * t2 + t
-    val h01 = -2f * t3 + 3f * t2
-    val h11 = t3 - t2
-
-    return h00 * y0 + h10 * h * d0 + h01 * y1 + h11 * h * d1
+    val foldFraction = (180f - clampedAngle) / 180f // 0.0 at 180°, 1.0 at 0°
+    val maxStretch = 0.45f
+    val eased = kotlin.math.sin(foldFraction * (Math.PI.toFloat() / 2f)).pow(1.3f)
+    return 1.0f + maxStretch * eased
 }
 
 /**

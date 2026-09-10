@@ -1,6 +1,7 @@
 package com.ajaxjiang.folddepth.ui
 
 import android.graphics.RenderEffect
+import android.graphics.RuntimeShader
 import android.graphics.Shader
 import android.net.Uri
 import android.os.Build
@@ -62,7 +63,67 @@ import com.ajaxjiang.folddepth.model.calculateAppleShade
 import com.ajaxjiang.folddepth.model.calculateFoldVisualParams
 import com.ajaxjiang.folddepth.model.smoothstep
 import com.ajaxjiang.folddepth.util.MediaStoreHelper
-import java.io.InputStream
+/**
+ * AGSL Hardware Shader for True Progressive Spatial Blur & Apple Exposure Darkening.
+ *
+ * Implements a true spatially-varying blur kernel (progressive blur):
+ * 1. At center seam (x = size.x, u = 0): radius = 0.0, shade = 1.0 -> 100% bit-identical sharp base!
+ * 2. Towards leftmost edge (x = 0, u = 1): radius expands dynamically with non-linear Apple curve.
+ * 3. Samples 16 taps in a Vogel's Golden Angle spiral with per-pixel interleaved gradient noise jitter.
+ * 4. Applies ambient exposure darkening to prevent grey fog, sinking softly into the black void.
+ */
+private const val AGSL_PROGRESSIVE_BLUR = """
+    uniform shader content;
+    uniform float2 size;
+    uniform float wipeAmount;
+    uniform float maxRadius;
+
+    float ign(float2 p) {
+        return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+    }
+
+    vec4 main(float2 fragCoord) {
+        // u = 0.0 at center crease seam (fragCoord.x == size.x)
+        // u = 1.0 at leftmost screen edge (fragCoord.x == 0.0)
+        float u = clamp(1.0 - (fragCoord.x / size.x), 0.0, 1.0);
+
+        // Apple Duo spatial blur radius curve:
+        // Pure clarity at crease seam, dynamic spatial dispersion towards the left
+        float radius = maxRadius * wipeAmount * pow(u, 1.35);
+
+        // Apple ambient exposure darkening:
+        // Strictly 1.0 (no darkening) at seam, sinks into pure black void at left
+        float shade = clamp(1.0 - 0.70 * wipeAmount * pow(u, 1.15), 0.0, 1.0);
+
+        // Fast path near hinge (zero blur)
+        if (radius < 0.5) {
+            vec4 base = content.eval(fragCoord);
+            return vec4(base.rgb * shade, base.a);
+        }
+
+        // 16-tap Vogel's Golden Angle spiral with per-pixel rotation jitter
+        const int SAMPLES = 16;
+        const float GOLDEN_ANGLE = 2.39996323;
+        float jitter = ign(fragCoord) * 6.283185;
+
+        vec4 sum = vec4(0.0);
+        float totalWeight = 0.0;
+
+        for (int i = 0; i < 16; i++) {
+            float fi = float(i);
+            float r = sqrt((fi + 0.5) / 16.0) * radius;
+            float theta = fi * GOLDEN_ANGLE + jitter;
+            float2 offset = float2(cos(theta), sin(theta)) * r;
+
+            float weight = 1.0 - (r / (radius + 0.01)) * 0.5;
+            sum += content.eval(fragCoord + offset) * weight;
+            totalWeight += weight;
+        }
+
+        vec4 blurred = sum / totalWeight;
+        return vec4(blurred.rgb * shade, blurred.a);
+    }
+"""
 
 @Composable
 fun FoldDepthDemo(
@@ -85,6 +146,12 @@ fun FoldDepthDemo(
     var showUi by remember { mutableStateOf(false) }
     var showHardwareOverrideSlider by remember { mutableStateOf(false) }
     var showOuterPreviewExpanded by remember { mutableStateOf(false) }
+
+    val agslShader = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            RuntimeShader(AGSL_PROGRESSIVE_BLUR)
+        } else null
+    }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
@@ -129,13 +196,23 @@ fun FoldDepthDemo(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .background(Color.Black),
+                    .background(Color.Black)
+                    // AGSL True Progressive Spatial Blur & Exposure Darkening:
+                    // Stationed on display glass (in screen space) so the 3D surface rotates into the blur
+                    .graphicsLayer {
+                        val wipeAmount = visualParams.wipeAmount
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && agslShader != null && wipeAmount > 0.005f) {
+                            agslShader.setFloatUniform("size", size.width, size.height)
+                            agslShader.setFloatUniform("wipeAmount", wipeAmount)
+                            agslShader.setFloatUniform("maxRadius", 50f)
+                            renderEffect = RenderEffect
+                                .createRuntimeShaderEffect(agslShader, "content")
+                                .asComposeRenderEffect()
+                        }
+                    },
             ) {
-                val wipeAmount = visualParams.wipeAmount
-
-                // 1. Base Sharp Wallpaper Panel
-                // Cross-fades linearly towards the left so sharp pixels don't show under heavy blur,
-                // and reaches STRICTLY 1.0 (100% opaque & sharp) at the center seam (x = size.width).
+                // Unified rotating & stretching panel:
+                // Rotates in 3D around hinge seam and stretches horizontally with physical elastic model
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -144,110 +221,12 @@ fun FoldDepthDemo(
                             scaleX = visualParams.scaleXLeft
                             cameraDistance = 14f * density
                             transformOrigin = TransformOrigin(1f, 0.5f) // pivot along center hinge
-                        }
-                        .drawWithContent {
-                            drawContent()
-                            if (wipeAmount > 0.005f) {
-                                // Strictly linear fade: 1.0 - wipeAmount at x = 0, exactly 1.0 at center seam
-                                drawRect(
-                                    brush = Brush.horizontalGradient(
-                                        colors = listOf(
-                                            Color.Black.copy(alpha = (1.0f - wipeAmount).coerceIn(0f, 1f)),
-                                            Color.Black, // 100% opaque at center seam!
-                                        ),
-                                        startX = 0f,
-                                        endX = size.width,
-                                    ),
-                                    blendMode = BlendMode.DstIn,
-                                )
-                            }
                         },
                 ) {
                     WallpaperHalfView(
                         isLeftHalf = true,
                         customBitmap = customBitmap,
                         modifier = Modifier.fillMaxSize(),
-                    )
-                }
-
-                // 2. Linear Gradient Blur Overlay
-                // STATIONARY IN SCREEN SPACE ON TOP OF ROTATION:
-                // From left to right: strictly linear decrease, reaching EXACTLY 0.0 at the center seam!
-                // TileMode.DECAL allows blur to naturally diffuse into outer transparent space.
-                if (Build.VERSION.SDK_INT >= 31 && visualParams.innerLeftMaxBlurPx > 0.3f && wipeAmount > 0.005f) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            // Screen-space stationary compositing: NO 3D rotation on this container!
-                            .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
-                            .graphicsLayer {
-                                renderEffect = RenderEffect
-                                    .createBlurEffect(
-                                        visualParams.innerLeftMaxBlurPx,
-                                        visualParams.innerLeftMaxBlurPx,
-                                        Shader.TileMode.DECAL,
-                                    )
-                                    .asComposeRenderEffect()
-                            }
-                            .drawWithContent {
-                                drawContent()
-                                // Strictly linear gradient mask from left (wipeAmount) to center seam (0.0):
-                                drawRect(
-                                    brush = Brush.horizontalGradient(
-                                        colors = listOf(
-                                            Color.Black.copy(alpha = wipeAmount.coerceIn(0f, 1f)),
-                                            Color.Transparent, // Strictly 0.0 alpha at the center seam!
-                                        ),
-                                        startX = 0f,
-                                        endX = size.width,
-                                    ),
-                                    blendMode = BlendMode.DstIn,
-                                )
-                            },
-                    ) {
-                        // Renders the rotating & stretching content into the screen-space blur filter
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .graphicsLayer {
-                                    rotationY = visualParams.rotationYLeft
-                                    scaleX = visualParams.scaleXLeft
-                                    cameraDistance = 14f * density
-                                    transformOrigin = TransformOrigin(1f, 0.5f)
-                                },
-                        ) {
-                            WallpaperHalfView(
-                                isLeftHalf = true,
-                                customBitmap = customBitmap,
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                        }
-                    }
-                }
-
-                // 3. Linear Exposure Darkening Overlay
-                // STATIONARY IN SCREEN SPACE ON TOP OF ROTATION:
-                // Leftmost edge (x = 0): maximum darkening (sinks into black void)
-                // Center seam (x = size.width): strictly 0.0 alpha (Color.Transparent) -> ZERO color difference!
-                // Strictly linear decrease from left to right.
-                if (wipeAmount > 0.005f) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .drawWithContent {
-                                drawContent()
-                                // Strictly linear darkening from left (0.65 * wipeAmount) to center seam (0.0):
-                                drawRect(
-                                    brush = Brush.horizontalGradient(
-                                        colors = listOf(
-                                            Color.Black.copy(alpha = 0.65f * wipeAmount),
-                                            Color.Transparent, // Strictly 0.0 at center seam: NO color difference!
-                                        ),
-                                        startX = 0f,
-                                        endX = size.width,
-                                    ),
-                                )
-                            },
                     )
                 }
             }
@@ -475,7 +454,7 @@ fun FoldDepthDemo(
                             fontFamily = FontFamily.Monospace,
                         )
                         Text(
-                            text = "Apple Wipe: %.2f · Ambient Shading: ON".format(visualParams.wipeAmount),
+                            text = "AGSL Progressive Blur · Ambient Shading: ON",
                             color = Color(0xFFF472B6),
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
