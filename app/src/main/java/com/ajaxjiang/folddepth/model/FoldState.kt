@@ -3,12 +3,12 @@ package com.ajaxjiang.folddepth.model
 import kotlin.math.pow
 
 /**
- * Represents the current fold state of the device or active simulation.
+ * Represents the current physical or simulated fold state of the device.
  *
- * @property angle Hinge angle in degrees (0° = completely folded/closed, 180° = flat/open).
- * @property progress Normalized progress between 0f (closed) and 1f (open).
- * @property isHardwareAvailable Whether the physical device exposes Sensor.TYPE_HINGE_ANGLE.
- * @property isSimulated Whether the angle is currently driven by developer debug simulation.
+ * @property angle Hinge angle in degrees (0° = closed, 180° = fully flat/open).
+ * @property progress Normalized fold progress between 0f (closed) and 1f (flat).
+ * @property isHardwareAvailable True if Sensor.TYPE_HINGE_ANGLE is present on the hardware.
+ * @property isSimulated True if developer debug simulation is currently overriding the sensor.
  */
 data class FoldState(
     val angle: Float,
@@ -18,39 +18,57 @@ data class FoldState(
 )
 
 /**
- * Derived visual effect parameters mapped directly from normalized fold progress: UI = f(hingeAngle).
+ * Derived visual effect parameters mapped directly from the physical fold state:
  *
- * @property blurPx Blur radius in pixels applied via RenderEffect.
- * @property scale Layer scale factor (e.g., 0.86f to 1.0f).
- * @property alpha Layer opacity (e.g., 0.18f to 1.0f).
- * @property translationY Layer vertical translation offset in pixels.
+ * 1. Inner Left Half: Gradient blur from 0 at hinge to [innerLeftMaxBlurPx] at far left edge.
+ *    As angle decreases (180° -> 0°), blur increases monotonically.
+ * 2. Inner Right Half: Stays 100% crisp at all times (blur = 0).
+ * 3. Outer Screen (Cover Display): Activates when angle <= 90°.
+ *    Displays right half of the original wallpaper with inverted gradient blur (clear near hinge,
+ *    blurred on the right). As angle decreases (90° -> 0°), the outer screen clarifies until
+ *    reaching 100% sharpness at 0° (fully closed).
  */
 data class FoldVisualParams(
-    val blurPx: Float,
-    val scale: Float,
-    val alpha: Float,
-    val translationY: Float,
+    val innerLeftMaxBlurPx: Float,
+    val innerRightBlurPx: Float = 0f,
+    val isOuterScreenActive: Boolean,
+    val outerBlurPx: Float,
+    val rotationYLeft: Float = 0f,
 )
 
 /**
- * Pure function mapping normalized fold progress [0f, 1f] to visual rendering parameters.
- * Keeping this decoupled allows future expansion into spatial blur fields, AGSL RuntimeShaders,
- * perspective transforms, and velocity tracking.
+ * Pure calculation function mapping [FoldState] to [FoldVisualParams].
  */
-fun calculateFoldVisualParams(progress: Float): FoldVisualParams {
-    val clamped = progress.coerceIn(0f, 1f)
-    val eased = smoothstep(clamped)
+fun calculateFoldVisualParams(state: FoldState): FoldVisualParams {
+    val angle = state.angle.coerceIn(0f, 180f)
+    val progress = (angle / 180f).coerceIn(0f, 1f)
 
-    val blurPx = 34f * (1f - eased).pow(1.35f)
-    val scale = 0.86f + 0.14f * eased
-    val alpha = 0.18f + 0.82f * eased
-    val translationY = 72f * (1f - eased)
+    // Inner left blur increases as angle drops: 180° -> 0px, 0° -> 48px
+    val closedFraction = 1f - progress
+    val easedClosed = smoothstep(closedFraction)
+    val innerLeftMaxBlurPx = 48f * easedClosed.pow(1.2f)
+
+    // Outer screen is active when hinge angle is 90° or less
+    val isOuterScreenActive = angle <= 90f
+
+    // Outer screen blur: At 90° it starts with peak blur (~40px),
+    // and as angle drops from 90° -> 0°, it gets clearer and clearer (0px at 0°)
+    val outerBlurPx = if (isOuterScreenActive) {
+        val outerProgress = (angle / 90f).coerceIn(0f, 1f)
+        40f * smoothstep(outerProgress)
+    } else {
+        0f
+    }
+
+    // Subtle 3D perspective fold on the left half (hinge at right edge of left half)
+    val rotationYLeft = -((180f - angle) * 0.18f)
 
     return FoldVisualParams(
-        blurPx = blurPx,
-        scale = scale,
-        alpha = alpha,
-        translationY = translationY,
+        innerLeftMaxBlurPx = innerLeftMaxBlurPx,
+        innerRightBlurPx = 0f,
+        isOuterScreenActive = isOuterScreenActive,
+        outerBlurPx = outerBlurPx,
+        rotationYLeft = rotationYLeft,
     )
 }
 
