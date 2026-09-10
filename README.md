@@ -17,17 +17,27 @@ FoldDepth rejects fixed-duration animations (e.g. canned 500ms timelines) in fav
 
 ## Spatial Fold Interaction Rules
 
-### 1. Inner Screen (Dual-Pane Split)
+### 1. Inner Screen (Dual-Pane Asymmetric Fold)
 The unfolded display is split down the center crease:
 - **Right Half (Stationary Anchor)**:
-  - Remains **100% crisp and unblurred** at all times (`blur = 0px`).
+  - Remains **100% crisp and unblurred** at all times (`blur = 0px`, `scaleX = 1.0x`).
 - **Left Half (Pivoting Depth Surface)**:
-  - Applies a hardware-accelerated **horizontal gradient blur** ("从右往左，越左边越模糊"):
-    - **Center Crease / Right Edge**: Blur is $0\text{px}$ (seamlessly matches the crisp right half).
-    - **Far Left Edge**: Reaches maximum blur intensity.
-  - As the hinge angle decreases from $180^\circ \to 0^\circ$:
-    - The maximum blur on the left edge increases monotonically ($0\text{px} \to 48\text{px}$).
-    - The left surface subtly tilts with 3D perspective along the hinge axis.
+  - **Native AGSL Progressive Spatial Blur (Android 13+ / API 33+)**:
+    - Powered by `android.graphics.RuntimeShader` and `RenderEffect.createRuntimeShaderEffect`.
+    - **Center Seam**: Blur radius is strictly $0\text{px}$ (single-sample fast path, 100% bit-identical to the right half).
+    - **Outer Left Edge**: Radius expands dynamically using a non-linear diffusion curve.
+    - Sampled via a **16-Tap Vogel's Golden Angle Spiral** with per-pixel Interleaved Gradient Noise (IGN) jitter to eliminate banding.
+  - **Apple Ambient Exposure Darkening**:
+    - Rather than washed-out grey fog, heavily blurred pixels sink naturally into the pure black background void.
+  - **Keyframed Elastic Horizontal Stretch**:
+    - **$180^\circ$ (Flat)**: $1.0\times$ (normal 1:1 aspect ratio)
+    - **$130^\circ$**: $1.5\times$
+    - **$115^\circ$**: $2.0\times$
+    - **$100^\circ$**: $3.0\times$
+    - **$0^\circ$ (Closed)**: $3.6\times$
+    - Smoothly interpolated via a Monotonic Cubic Hermite Spline (PCHIP) anchored at `TransformOrigin(1f, 0.5f)` so the center seam never moves.
+  - **Subtle 3D Perspective Rotation**:
+    - Left half rotates inward along the center hinge axis (`rotationYLeft = -(180° - angle) * 0.36f`).
 
 ### 2. Outer Screen (Cover Display at $\le 90^\circ$)
 - When the hinge angle closes to **$90^\circ$ or less**, the outer screen activates.
@@ -36,74 +46,53 @@ The unfolded display is split down the center crease:
   - **Left Edge (near hinge)**: Crisp and clear ($0\text{px}$ blur).
   - **Right Edge**: Reaches maximum blur.
 - **Clarification Dynamics ("折角越小整体越清晰")**:
-  - At $90^\circ$: The outer screen starts with its peak blur ($\sim 40\text{px}$).
+  - At $90^\circ$: The outer screen starts with its peak blur ($\sim 100\text{px}$).
   - As the angle drops from $90^\circ \to 0^\circ$: The blur smoothly decreases to $0\text{px}$.
   - At $0^\circ$ (fully closed): The outer screen is 100% flat and crystal clear.
 
 ---
 
-## Technical Architecture
+## High-Performance Hardware Polling
 
-```
-[Physical Hinge: Sensor.TYPE_HINGE_ANGLE]   or   [0°–180° Debug Simulation Slider]
-                                       │
-                                       ▼
-                   HingeAngleSource (SensorEventListener)
-                                       │
-                                       ▼
-                       FoldState (angle, progress, mode)
-                                       │
-                                       ▼
-                         calculateFoldVisualParams
-                      • innerLeftMaxBlurPx = 48 * (1 - p)^1.2
-                      • innerRightBlurPx = 0 (crisp)
-                      • isOuterScreenActive = (angle <= 90°)
-                      • outerBlurPx = 40 * (angle / 90°)
-                                       │
-                                       ▼
-    ┌──────────────────────────────────┴──────────────────────────────────┐
-    ▼                                                                     ▼
-[Inner Screen View]                                            [Outer Screen View]
-• Left 50%: Gradient Blur (DstIn Alpha Mask)                    • Physical Presentation API
-• Right 50%: 100% Crisp                                         • In-App Cover Display HUD
-• Built-in Wallpaper & Custom Screenshot                        • Inverted Gradient Blur
-```
-
-### Key Modules:
-- **`com.ajaxjiang.folddepth.model.FoldState`**: Immutable models and pure transfer functions calculating asymmetric inner and outer visual parameters.
-- **`com.ajaxjiang.folddepth.ui.FoldableWallpaperSurface`**: Renders high-resolution foldable desktop scenes (widgets, clock, search bar, dock) and supports importing custom screenshots.
-- **`com.ajaxjiang.folddepth.ui.FoldDepthDemo`**: Split-screen Compose interface applying GPU offscreen compositing (`RenderEffect` + `BlendMode.DstIn` linear gradient mask) for artifact-free horizontal gradient blur.
-- **`com.ajaxjiang.folddepth.display.OuterDisplayManager`**: Manages the physical secondary cover display via Android's `Presentation` API.
+- **Sensor**: `Sensor.TYPE_HINGE_ANGLE` registered with `SENSOR_DELAY_FASTEST` and zero batching (`maxReportLatencyUs = 0`).
+- **Dedicated Worker Thread**: Polled on an independent `HandlerThread` with `THREAD_PRIORITY_URGENT_DISPLAY`.
+- **Live Real-time Hz Readout**: Real-time sampling frequency (Hz) monitored and displayed live in the diagnostic HUD.
 
 ---
 
-## Native Foldable Support (OPPO ColorOS, Samsung, Xiaomi)
+## Direct Download APK
 
-FoldDepth is configured natively for foldables:
-- Declares `android:resizeableActivity="true"` and `configChanges` to prevent ColorOS / OneUI candy-bar letterboxing.
-- Supports display cutout mode `shortEdges` for full-bleed edge-to-edge rendering.
+Ready-to-install signed APKs are available directly in [GitHub Releases](https://github.com/ajaxjiang96/FoldDepth/releases):
+
+- [**Download FoldDepth-v0.1.0.apk**](https://github.com/ajaxjiang96/FoldDepth/releases/download/v0.1.0/FoldDepth-v0.1.0.apk)
+  - Signed with debug keystore: directly installable on any Android 13+ device (`adb install` or tap to install).
 
 ---
 
 ## Running in Android Studio
 
 1. **Open the project**:
-   - Open Android Studio (Ladybug / Quail 2024–2026+).
-   - Let Gradle sync complete using the included Gradle Wrapper (`gradle-9.5.0`).
+   - Open Android Studio (Ladybug / Meerkat / Quail 2024–2026+).
+   - Let Gradle sync complete using Gradle `9.5.0` with Android Gradle Plugin `9.3.2`.
 2. **Select Run Configuration**:
-   - Choose `app` and select your target device (OPPO foldable, Pixel Fold, or standard emulator).
+   - Choose `app` and select your target device (OPPO Find N, Samsung Galaxy Z Fold, Pixel Fold, or standard emulator).
 3. **Press Run (▶)**:
    - The app compiles and installs directly.
 
 Or build from the terminal:
 ```bash
+# Debug APK:
 ./gradlew assembleDebug
+
+# Signed Release APK:
+./gradlew assembleRelease
 ```
 
 ---
 
-## Developer Simulation & Screenshot Testing
+## Interactive Controls & Gestures
 
-- **0°–180° Debug Slider**: Available at the bottom of the screen to scrub the entire folding transition smoothly without needing a physical foldable.
-- **Import Screenshot**: Tap **"Import Screenshot"** at the top right to pick any screenshot from your device (e.g. your phone's real home screen) to test spatial folding directly on your own wallpaper.
-- **Cover Screen Preview HUD**: When the angle is $\le 90^\circ$, a live Cover Screen preview card appears in the upper right. Tap it to expand and inspect the outer screen's inverted gradient blur.
+- **Tap Screen Anywhere**: Toggle all HUD elements on/off (defaults to clean 100% fullscreen wallpaper mode).
+- **Auto-Load Wallpaper**: Automatically queries the latest photo from your device's photo gallery on startup (`MediaStoreHelper`).
+- **0°–180° Debug Slider**: Available in HUD to scrub the entire folding transition smoothly without a physical foldable device.
+- **Cover Screen Preview HUD**: Live preview card in the upper right when angle $\le 90^\circ$. Tap to expand and inspect the outer screen.
