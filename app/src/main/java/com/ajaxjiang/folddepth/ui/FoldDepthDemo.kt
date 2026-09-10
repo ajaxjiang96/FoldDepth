@@ -57,7 +57,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ajaxjiang.folddepth.model.FoldState
+import com.ajaxjiang.folddepth.model.calculateAppleBlurArea
+import com.ajaxjiang.folddepth.model.calculateAppleShade
 import com.ajaxjiang.folddepth.model.calculateFoldVisualParams
+import com.ajaxjiang.folddepth.model.smoothstep
 import com.ajaxjiang.folddepth.util.MediaStoreHelper
 import java.io.InputStream
 
@@ -146,8 +149,19 @@ fun FoldDepthDemo(
                         modifier = Modifier.fillMaxSize(),
                     )
 
-                    // Hardware-accelerated heavy gradient blur overlay
-                    if (Build.VERSION.SDK_INT >= 31 && visualParams.innerLeftMaxBlurPx > 0.3f) {
+                    // 2. Hardware-accelerated Apple Non-Linear Gradient Blur Overlay
+                    // Driven by Apple's formula: remap(-0.25, 1.0, distance) * wipeAmount * 2.5
+                    // Guarantees pure clarity near the hinge, while outer left edge bursts into heavy blur.
+                    if (Build.VERSION.SDK_INT >= 31 && visualParams.innerLeftMaxBlurPx > 0.3f && visualParams.wipeAmount > 0.005f) {
+                        val blurAlphaStops = remember(visualParams.wipeAmount) {
+                            Array(21) { i ->
+                                val u = i / 20f // 0.0 at left, 1.0 at hinge
+                                val blurArea = calculateAppleBlurArea(u, visualParams.wipeAmount)
+                                val alpha = blurArea.coerceIn(0f, 1f)
+                                u to Color.Black.copy(alpha = alpha)
+                            }
+                        }
+
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -163,13 +177,9 @@ fun FoldDepthDemo(
                                 }
                                 .drawWithContent {
                                     drawContent()
-                                    // Alpha mask: 1.0 at leftmost edge (maximum blur), 0.0 at center hinge (zero blur)
+                                    // Apple non-linear alpha mask
                                     drawRect(
-                                        brush = Brush.horizontalGradient(
-                                            colors = listOf(Color.Black, Color.Transparent),
-                                            startX = 0f,
-                                            endX = size.width,
-                                        ),
+                                        brush = Brush.horizontalGradient(colorStops = blurAlphaStops),
                                         blendMode = BlendMode.DstIn,
                                     )
                                 },
@@ -182,21 +192,52 @@ fun FoldDepthDemo(
                         }
                     }
 
-                    // Crease ambient shadow: subtle depth shading near the hinge as fold angle decreases
-                    if (visualParams.creaseShadowAlpha > 0.01f) {
+                    // 3. Apple Ambient Crease Shading & Deep Exposure Darkening
+                    // Driven by Apple's formula: smoothstep(1.3, 0.9, blurArea)
+                    // Deeply immerses the blurred left side into the pure black background void,
+                    // preventing foggy grey haze and adding natural crease ambient occlusion.
+                    if (visualParams.wipeAmount > 0.005f) {
+                        val exposureDarknessStops = remember(visualParams.wipeAmount, visualParams.creaseShadowAlpha) {
+                            Array(21) { i ->
+                                val u = i / 20f // 0.0 at left, 1.0 at hinge
+                                val rawBlurArea = calculateAppleBlurArea(u, visualParams.wipeAmount)
+                                val shade = calculateAppleShade(rawBlurArea)
+
+                                // Crease ambient shadow near the hinge (u in 0.82 .. 1.0)
+                                val creaseShade = if (u >= 0.82f) {
+                                    val creaseT = (u - 0.82f) / 0.18f
+                                    1.0f - (visualParams.creaseShadowAlpha * smoothstep(creaseT))
+                                } else {
+                                    1.0f
+                                }
+
+                                val totalShade = (shade * creaseShade).coerceIn(0f, 1f)
+                                val blackAlpha = 1.0f - totalShade
+                                u to Color.Black.copy(alpha = blackAlpha)
+                            }
+                        }
+
+                        // Overlay for exposure darkening and hinge crease occlusion
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .drawWithContent {
                                     drawContent()
+                                    // Horizontal exposure darkening & crease shadow
                                     drawRect(
-                                        brush = Brush.horizontalGradient(
+                                        brush = Brush.horizontalGradient(colorStops = exposureDarknessStops),
+                                    )
+                                    // Apple subtle vertical vignette at top and bottom edges
+                                    drawRect(
+                                        brush = Brush.verticalGradient(
                                             colors = listOf(
+                                                Color.Black.copy(alpha = 0.35f * visualParams.wipeAmount),
                                                 Color.Transparent,
-                                                Color.Black.copy(alpha = visualParams.creaseShadowAlpha),
+                                                Color.Transparent,
+                                                Color.Black.copy(alpha = 0.35f * visualParams.wipeAmount),
                                             ),
-                                            startX = size.width * 0.7f,
-                                            endX = size.width,
+                                            startY = 0f,
+                                            endY = size.height,
                                         ),
                                     )
                                 },
@@ -425,6 +466,12 @@ fun FoldDepthDemo(
                             ),
                             color = Color.White.copy(alpha = 0.8f),
                             fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                        Text(
+                            text = "Apple Wipe: %.2f · Ambient Shading: ON".format(visualParams.wipeAmount),
+                            color = Color(0xFFF472B6),
+                            fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                         )
                     }
