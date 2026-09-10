@@ -131,7 +131,7 @@ fun FoldDepthDemo(
                     .fillMaxHeight()
                     .background(Color.Black),
             ) {
-                // 3D Folding panel: pivots around center crease (right edge)
+                // 1. Base 3D Rotating & Stretching Wallpaper Panel
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -142,46 +142,59 @@ fun FoldDepthDemo(
                             transformOrigin = TransformOrigin(1f, 0.5f) // pivot along center hinge
                         },
                 ) {
-                    // Base sharp wallpaper layer
                     WallpaperHalfView(
                         isLeftHalf = true,
                         customBitmap = customBitmap,
                         modifier = Modifier.fillMaxSize(),
                     )
+                }
 
-                    // 2. Hardware-accelerated Apple Non-Linear Gradient Blur Overlay
-                    // Driven by Apple's formula: remap(-0.25, 1.0, distance) * wipeAmount * 2.5
-                    // Guarantees pure clarity near the hinge, while outer left edge bursts into heavy blur.
-                    if (Build.VERSION.SDK_INT >= 31 && visualParams.innerLeftMaxBlurPx > 0.3f && visualParams.wipeAmount > 0.005f) {
-                        val blurAlphaStops = remember(visualParams.wipeAmount) {
-                            Array(21) { i ->
-                                val u = i / 20f // 0.0 at left, 1.0 at hinge
-                                val blurArea = calculateAppleBlurArea(u, visualParams.wipeAmount)
-                                val alpha = blurArea.coerceIn(0f, 1f)
-                                u to Color.Black.copy(alpha = alpha)
-                            }
+                // 2. Hardware-accelerated Apple Non-Linear Gradient Blur Overlay
+                // STATIONARY IN SCREEN SPACE ON TOP OF ROTATION: Does NOT rotate with the panel!
+                // Driven by Apple's formula: remap(-0.25, 1.0, distance) * wipeAmount * 2.5
+                // Guarantees pure clarity near the hinge, while outer left edge bursts into heavy blur.
+                if (Build.VERSION.SDK_INT >= 31 && visualParams.innerLeftMaxBlurPx > 0.3f && visualParams.wipeAmount > 0.005f) {
+                    val blurAlphaStops = remember(visualParams.wipeAmount) {
+                        Array(21) { i ->
+                            val u = i / 20f // 0.0 at left, 1.0 at hinge
+                            val blurArea = calculateAppleBlurArea(u, visualParams.wipeAmount)
+                            val alpha = blurArea.coerceIn(0f, 1f)
+                            u to Color.Black.copy(alpha = alpha)
                         }
+                    }
 
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            // Screen-space stationary compositing: NO 3D rotation on this container!
+                            .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+                            .graphicsLayer {
+                                renderEffect = RenderEffect
+                                    .createBlurEffect(
+                                        visualParams.innerLeftMaxBlurPx,
+                                        visualParams.innerLeftMaxBlurPx,
+                                        Shader.TileMode.CLAMP,
+                                    )
+                                    .asComposeRenderEffect()
+                            }
+                            .drawWithContent {
+                                drawContent()
+                                // Apple non-linear alpha mask in stationary screen space
+                                drawRect(
+                                    brush = Brush.horizontalGradient(colorStops = blurAlphaStops),
+                                    blendMode = BlendMode.DstIn,
+                                )
+                            },
+                    ) {
+                        // Renders the rotating content into the screen-space blur filter
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
                                 .graphicsLayer {
-                                    renderEffect = RenderEffect
-                                        .createBlurEffect(
-                                            visualParams.innerLeftMaxBlurPx,
-                                            visualParams.innerLeftMaxBlurPx,
-                                            Shader.TileMode.CLAMP,
-                                        )
-                                        .asComposeRenderEffect()
-                                }
-                                .drawWithContent {
-                                    drawContent()
-                                    // Apple non-linear alpha mask
-                                    drawRect(
-                                        brush = Brush.horizontalGradient(colorStops = blurAlphaStops),
-                                        blendMode = BlendMode.DstIn,
-                                    )
+                                    rotationY = visualParams.rotationYLeft
+                                    scaleX = visualParams.scaleXLeft
+                                    cameraDistance = 14f * density
+                                    transformOrigin = TransformOrigin(1f, 0.5f)
                                 },
                         ) {
                             WallpaperHalfView(
@@ -191,58 +204,58 @@ fun FoldDepthDemo(
                             )
                         }
                     }
+                }
 
-                    // 3. Apple Ambient Crease Shading & Deep Exposure Darkening
-                    // Driven by Apple's formula: smoothstep(1.3, 0.9, blurArea)
-                    // Deeply immerses the blurred left side into the pure black background void,
-                    // preventing foggy grey haze and adding natural crease ambient occlusion.
-                    if (visualParams.wipeAmount > 0.005f) {
-                        val exposureDarknessStops = remember(visualParams.wipeAmount, visualParams.creaseShadowAlpha) {
-                            Array(21) { i ->
-                                val u = i / 20f // 0.0 at left, 1.0 at hinge
-                                val rawBlurArea = calculateAppleBlurArea(u, visualParams.wipeAmount)
-                                val shade = calculateAppleShade(rawBlurArea)
+                // 3. Apple Ambient Crease Shading & Deep Exposure Darkening
+                // STATIONARY IN SCREEN SPACE ON TOP OF ROTATION: Does NOT rotate with the panel!
+                // Driven by Apple's formula: smoothstep(1.3, 0.9, blurArea)
+                // Deeply immerses the blurred left side into the pure black background void.
+                if (visualParams.wipeAmount > 0.005f) {
+                    val exposureDarknessStops = remember(visualParams.wipeAmount, visualParams.creaseShadowAlpha) {
+                        Array(21) { i ->
+                            val u = i / 20f // 0.0 at left, 1.0 at hinge
+                            val rawBlurArea = calculateAppleBlurArea(u, visualParams.wipeAmount)
+                            val shade = calculateAppleShade(rawBlurArea)
 
-                                // Crease ambient shadow near the hinge (u in 0.82 .. 1.0)
-                                val creaseShade = if (u >= 0.82f) {
-                                    val creaseT = (u - 0.82f) / 0.18f
-                                    1.0f - (visualParams.creaseShadowAlpha * smoothstep(creaseT))
-                                } else {
-                                    1.0f
-                                }
-
-                                val totalShade = (shade * creaseShade).coerceIn(0f, 1f)
-                                val blackAlpha = 1.0f - totalShade
-                                u to Color.Black.copy(alpha = blackAlpha)
+                            // Crease ambient shadow near the hinge (u in 0.82 .. 1.0)
+                            val creaseShade = if (u >= 0.82f) {
+                                val creaseT = (u - 0.82f) / 0.18f
+                                1.0f - (visualParams.creaseShadowAlpha * smoothstep(creaseT))
+                            } else {
+                                1.0f
                             }
-                        }
 
-                        // Overlay for exposure darkening and hinge crease occlusion
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .drawWithContent {
-                                    drawContent()
-                                    // Horizontal exposure darkening & crease shadow
-                                    drawRect(
-                                        brush = Brush.horizontalGradient(colorStops = exposureDarknessStops),
-                                    )
-                                    // Apple subtle vertical vignette at top and bottom edges
-                                    drawRect(
-                                        brush = Brush.verticalGradient(
-                                            colors = listOf(
-                                                Color.Black.copy(alpha = 0.35f * visualParams.wipeAmount),
-                                                Color.Transparent,
-                                                Color.Transparent,
-                                                Color.Black.copy(alpha = 0.35f * visualParams.wipeAmount),
-                                            ),
-                                            startY = 0f,
-                                            endY = size.height,
-                                        ),
-                                    )
-                                },
-                        )
+                            val totalShade = (shade * creaseShade).coerceIn(0f, 1f)
+                            val blackAlpha = 1.0f - totalShade
+                            u to Color.Black.copy(alpha = blackAlpha)
+                        }
                     }
+
+                    // Stationary screen-space darkening overlay
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .drawWithContent {
+                                drawContent()
+                                // Horizontal exposure darkening & crease shadow in screen space
+                                drawRect(
+                                    brush = Brush.horizontalGradient(colorStops = exposureDarknessStops),
+                                )
+                                // Apple subtle vertical vignette in screen space
+                                drawRect(
+                                    brush = Brush.verticalGradient(
+                                        colors = listOf(
+                                            Color.Black.copy(alpha = 0.35f * visualParams.wipeAmount),
+                                            Color.Transparent,
+                                            Color.Transparent,
+                                            Color.Black.copy(alpha = 0.35f * visualParams.wipeAmount),
+                                        ),
+                                        startY = 0f,
+                                        endY = size.height,
+                                    ),
+                                )
+                            },
+                    )
                 }
             }
 

@@ -66,8 +66,8 @@ fun calculateFoldVisualParams(state: FoldState): FoldVisualParams {
         0f
     }
 
-    // 3D folding angle: softened to half of physical fold: -((180° - angle) * 0.5f)
-    val rotationYLeft = -((180f - angle) * 0.5f)
+    // 3D folding angle: restored to the subtle original perspective factor (0.18f)
+    val rotationYLeft = -((180f - angle) * 0.18f)
 
     // Dynamic horizontal elastic stretch (Apple Duo-style wipe & stretch):
     // As the panel rotates inward, stretching outward from the hinge counteracts
