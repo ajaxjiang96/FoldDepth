@@ -1,6 +1,6 @@
 # FoldDepth
 
-An experimental Android foldable interaction prototype where the physical hinge angle directly drives asymmetrical depth-of-field and dual-display continuity.
+An experimental Android foldable interaction prototype where the physical hinge angle directly drives asymmetrical depth-of-field.
 
 <div align="center">
   <a href="https://youtu.be/vEq8UMa20Ag">
@@ -20,13 +20,12 @@ $$\text{UI} = f(\text{hingeAngle})$$
 FoldDepth rejects fixed-duration animations (e.g. canned 500ms timelines) in favor of **direct physical manipulation**. The visual state is a continuous, reversible, scrubbable transfer function of the device hinge angle:
 - If the physical hinge stops midway, the visual transition halts at that exact fractional state.
 - Unfolding to 180° smoothly reveals the full, flat, crystal-sharp interface.
-- Folding closed continuously deepens spatial blur and triggers cover-screen continuity.
+- Folding closed continuously deepens spatial blur and applies perspective depth.
 
 ---
 
-## Spatial Fold Interaction Rules
+## Spatial Fold Interaction Rules (Inner Screen)
 
-### 1. Inner Screen (Dual-Pane Asymmetric Fold)
 The unfolded display is split down the center crease:
 - **Right Half (Stationary Anchor)**:
   - Remains **100% crisp and unblurred** at all times (`blur = 0px`, `scaleX = 1.0x`).
@@ -48,16 +47,9 @@ The unfolded display is split down the center crease:
   - **Subtle 3D Perspective Rotation**:
     - Left half rotates inward along the center hinge axis (`rotationYLeft = -(180° - angle) * 0.36f`).
 
-### 2. Outer Screen (Cover Display at $\le 90^\circ$)
-- When the hinge angle closes to **$90^\circ$ or less**, the outer screen activates.
-- **Content**: Displays the **Right Half** of the original wallpaper / screenshot.
-- **Inverted Gradient Blur ("越右越模糊")**:
-  - **Left Edge (near hinge)**: Crisp and clear ($0\text{px}$ blur).
-  - **Right Edge**: Reaches maximum blur.
-- **Clarification Dynamics ("折角越小整体越清晰")**:
-  - At $90^\circ$: The outer screen starts with its peak blur ($\sim 100\text{px}$).
-  - As the angle drops from $90^\circ \to 0^\circ$: The blur smoothly decreases to $0\text{px}$.
-  - At $0^\circ$ (fully closed): The outer screen is 100% flat and crystal clear.
+> [!NOTE]
+> **Outer Screen Status**:
+> The current prototype focuses exclusively on the **inner screen** interaction and spatial depth calibration. The outer screen (cover display) rendering logic in the codebase is an uncalibrated placeholder/WIP stub and has not been tuned.
 
 ---
 
@@ -104,4 +96,3 @@ Or build from the terminal:
 - **Tap Screen Anywhere**: Toggle all HUD elements on/off (defaults to clean 100% fullscreen wallpaper mode).
 - **Auto-Load Wallpaper**: Automatically queries the latest photo from your device's photo gallery on startup (`MediaStoreHelper`).
 - **0°–180° Debug Slider**: Available in HUD to scrub the entire folding transition smoothly without a physical foldable device.
-- **Cover Screen Preview HUD**: Live preview card in the upper right when angle $\le 90^\circ$. Tap to expand and inspect the outer screen.

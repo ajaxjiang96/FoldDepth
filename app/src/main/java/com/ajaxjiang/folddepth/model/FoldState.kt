@@ -28,9 +28,7 @@ data class FoldState(
  *    - Dynamic horizontal elastic stretch [scaleXLeft] (Apple Duo-style wipe & stretch).
  *    - Subtle ambient occlusion crease shadow [creaseShadowAlpha] near the hinge.
  * 2. Inner Right Half: Stays 100% crisp at all times (blur = 0).
- * 3. Outer Screen (Cover Display): Activates when angle <= 90°.
- *    Displays right half of the original wallpaper with inverted gradient blur.
- *    As angle decreases (90° -> 0°), outer blur decreases to 0px (100% sharp at 0°).
+ * 3. Outer Screen (Cover Display): Uncalibrated placeholder stub (WIP / not calibrated).
  */
 data class FoldVisualParams(
     val innerLeftMaxBlurPx: Float,
