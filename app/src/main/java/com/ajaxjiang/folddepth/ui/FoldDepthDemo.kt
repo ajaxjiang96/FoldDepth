@@ -1,6 +1,5 @@
 package com.ajaxjiang.folddepth.ui
 
-import android.graphics.BitmapFactory
 import android.graphics.RenderEffect
 import android.graphics.Shader
 import android.net.Uri
@@ -10,12 +9,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -59,10 +58,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ajaxjiang.folddepth.model.FoldState
 import com.ajaxjiang.folddepth.model.calculateFoldVisualParams
+import com.ajaxjiang.folddepth.util.MediaStoreHelper
+import java.io.InputStream
 
 @Composable
 fun FoldDepthDemo(
     foldState: FoldState,
+    initialCustomBitmap: ImageBitmap?,
     onSimulateAngleChange: (Float) -> Unit,
     onToggleSimulation: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
@@ -72,7 +74,12 @@ fun FoldDepthDemo(
         calculateFoldVisualParams(foldState)
     }
 
-    var customBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    var customBitmap by remember(initialCustomBitmap) {
+        mutableStateOf(initialCustomBitmap)
+    }
+
+    // Default: Hide all app UI elements; tap screen anywhere to toggle UI visibility
+    var showUi by remember { mutableStateOf(false) }
     var showHardwareOverrideSlider by remember { mutableStateOf(false) }
     var showOuterPreviewExpanded by remember { mutableStateOf(false) }
 
@@ -82,7 +89,8 @@ fun FoldDepthDemo(
         uri?.let {
             try {
                 context.contentResolver.openInputStream(it)?.use { stream ->
-                    val bmp = BitmapFactory.decodeStream(stream)
+                    val bytes = stream.readBytes()
+                    val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                     if (bmp != null) {
                         customBitmap = bmp.asImageBitmap()
                     }
@@ -95,80 +103,89 @@ fun FoldDepthDemo(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(Color.Black)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+            ) {
+                showUi = !showUi
+            },
     ) {
         // ====================================================================
-        // INNER SCREEN SURFACE: Split down the center hinge
-        // Left Half: Horizontal gradient blur (blurrier to the left)
-        // Right Half: Unchanged & 100% crisp
+        // INNER SCREEN SURFACE: Seamless dual-pane layout (NO separation line)
+        // Left Half: Physically matches 3D fold angle -(180° - angle),
+        //            vacated screen space is pure black, and heavy gradient blur is applied.
+        // Right Half: Stationary, unblurred & 100% crisp.
         // ====================================================================
         Row(
             modifier = Modifier.fillMaxSize(),
         ) {
-            // --- LEFT HALF (Folds & Blurs horizontally from right to left) ---
+            // --- LEFT HALF CONTAINER ---
+            // Pure black background fills any screen space vacated when the panel rotates inward
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .graphicsLayer {
-                        rotationY = visualParams.rotationYLeft
-                        cameraDistance = 16f * density
-                        transformOrigin = TransformOrigin(1f, 0.5f) // pivot along center hinge
-                    },
+                    .background(Color.Black),
             ) {
-                // Base sharp layer
-                WallpaperHalfView(
-                    isLeftHalf = true,
-                    customBitmap = customBitmap,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                // 3D Folding panel: pivots around center crease (right edge)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            rotationY = visualParams.rotationYLeft
+                            cameraDistance = 14f * density
+                            transformOrigin = TransformOrigin(1f, 0.5f) // pivot along center hinge
+                        },
+                ) {
+                    // Base sharp wallpaper layer
+                    WallpaperHalfView(
+                        isLeftHalf = true,
+                        customBitmap = customBitmap,
+                        modifier = Modifier.fillMaxSize(),
+                    )
 
-                // Hardware-accelerated horizontal gradient blur overlay
-                if (Build.VERSION.SDK_INT >= 31 && visualParams.innerLeftMaxBlurPx > 0.3f) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
-                            .graphicsLayer {
-                                renderEffect = RenderEffect
-                                    .createBlurEffect(
-                                        visualParams.innerLeftMaxBlurPx,
-                                        visualParams.innerLeftMaxBlurPx,
-                                        Shader.TileMode.CLAMP,
+                    // Hardware-accelerated heavy gradient blur overlay
+                    if (Build.VERSION.SDK_INT >= 31 && visualParams.innerLeftMaxBlurPx > 0.3f) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+                                .graphicsLayer {
+                                    renderEffect = RenderEffect
+                                        .createBlurEffect(
+                                            visualParams.innerLeftMaxBlurPx,
+                                            visualParams.innerLeftMaxBlurPx,
+                                            Shader.TileMode.CLAMP,
+                                        )
+                                        .asComposeRenderEffect()
+                                }
+                                .drawWithContent {
+                                    drawContent()
+                                    // Alpha mask: 1.0 at leftmost edge (maximum blur), 0.0 at center hinge (zero blur)
+                                    drawRect(
+                                        brush = Brush.horizontalGradient(
+                                            colors = listOf(Color.Black, Color.Transparent),
+                                            startX = 0f,
+                                            endX = size.width,
+                                        ),
+                                        blendMode = BlendMode.DstIn,
                                     )
-                                    .asComposeRenderEffect()
-                            }
-                            .drawWithContent {
-                                drawContent()
-                                // Alpha mask: 1.0 at far left (max blur), 0.0 at center hinge (zero blur)
-                                drawRect(
-                                    brush = Brush.horizontalGradient(
-                                        colors = listOf(Color.Black, Color.Transparent),
-                                        startX = 0f,
-                                        endX = size.width,
-                                    ),
-                                    blendMode = BlendMode.DstIn,
-                                )
-                            },
-                    ) {
-                        WallpaperHalfView(
-                            isLeftHalf = true,
-                            customBitmap = customBitmap,
-                            modifier = Modifier.fillMaxSize(),
-                        )
+                                },
+                        ) {
+                            WallpaperHalfView(
+                                isLeftHalf = true,
+                                customBitmap = customBitmap,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
                     }
                 }
             }
 
-            // --- CENTER HINGE CREASE SEPARATOR LINE ---
-            Box(
-                modifier = Modifier
-                    .width(1.dp)
-                    .fillMaxHeight()
-                    .background(Color.White.copy(alpha = 0.12f)),
-            )
+            // (No crease divider line: Left and Right touch seamlessly)
 
-            // --- RIGHT HALF (Unchanged, 100% Crisp) ---
+            // --- RIGHT HALF (Unchanged & 100% Crisp) ---
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -183,87 +200,111 @@ fun FoldDepthDemo(
         }
 
         // ====================================================================
-        // TOP STATUS BAR & CONTROLS HUD
+        // OVERLAY UI (Hidden by default, toggled on/off by tapping screen)
         // ====================================================================
-        Row(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 24.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column {
-                Text(
-                    text = "FOLDDEPTH",
-                    color = Color.White,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 2.sp,
-                )
-                Text(
-                    text = "Inner Left: Gradient Blur | Right: Crisp",
-                    color = Color.White.copy(alpha = 0.55f),
-                    fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace,
-                )
-            }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // Screenshot / Wallpaper Picker Chip
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = Color.White.copy(alpha = 0.12f),
-                    modifier = Modifier
-                        .clickable {
-                            if (customBitmap != null) {
-                                customBitmap = null
-                            } else {
-                                imagePickerLauncher.launch("image/*")
-                            }
-                        }
-                        .padding(end = 8.dp),
-                ) {
+        // --- TOP STATUS BAR & CONTROLS ---
+        AnimatedVisibility(
+            visible = showUi,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopStart),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 24.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column {
                     Text(
-                        text = if (customBitmap != null) "Reset Preset" else "Import Screenshot",
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        text = "FOLDDEPTH",
                         color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 2.sp,
+                    )
+                    Text(
+                        text = if (customBitmap != null) "Latest Photo / Screenshot Active" else "Built-in Wallpaper Preset",
+                        color = Color.White.copy(alpha = 0.6f),
                         fontSize = 10.sp,
-                        fontWeight = FontWeight.Medium,
+                        fontFamily = FontFamily.Monospace,
                     )
                 }
 
-                // Sensor Status Chip
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = if (foldState.isHardwareAvailable && !foldState.isSimulated) {
-                        Color(0xFF166534)
-                    } else {
-                        Color(0xFF854D0E)
-                    },
-                ) {
-                    Text(
-                        text = when {
-                            foldState.isHardwareAvailable && !foldState.isSimulated -> "LIVE HINGE SENSOR"
-                            foldState.isHardwareAvailable && foldState.isSimulated -> "SIMULATED"
-                            else -> "NO SENSOR (DEBUG)"
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Reload Latest Gallery Photo
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color.White.copy(alpha = 0.15f),
+                        modifier = Modifier
+                            .clickable {
+                                val latest = MediaStoreHelper.loadLatestGalleryImage(context)
+                                if (latest != null) {
+                                    customBitmap = latest
+                                } else {
+                                    imagePickerLauncher.launch("image/*")
+                                }
+                            }
+                            .padding(end = 8.dp),
+                    ) {
+                        Text(
+                            text = "Reload Latest",
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+
+                    // Choose Screenshot File
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color.White.copy(alpha = 0.15f),
+                        modifier = Modifier
+                            .clickable { imagePickerLauncher.launch("image/*") }
+                            .padding(end = 8.dp),
+                    ) {
+                        Text(
+                            text = "Pick Image",
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+
+                    // Sensor Status Badge
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (foldState.isHardwareAvailable && !foldState.isSimulated) {
+                            Color(0xFF166534)
+                        } else {
+                            Color(0xFF854D0E)
                         },
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                        color = Color.White,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 0.5.sp,
-                    )
+                    ) {
+                        Text(
+                            text = when {
+                                foldState.isHardwareAvailable && !foldState.isSimulated -> "LIVE SENSOR"
+                                foldState.isHardwareAvailable && foldState.isSimulated -> "SIMULATED"
+                                else -> "DEBUG SLIDER"
+                            },
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 0.5.sp,
+                        )
+                    }
                 }
             }
         }
 
-        // ====================================================================
-        // DUAL-SCREEN HUD / COVER DISPLAY PREVIEW (Activated when angle <= 90°)
-        // ====================================================================
+        // --- DUAL-SCREEN HUD / COVER DISPLAY PREVIEW (When angle <= 90° and UI is visible) ---
         AnimatedVisibility(
-            visible = visualParams.isOuterScreenActive,
+            visible = showUi && visualParams.isOuterScreenActive,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier
@@ -274,7 +315,7 @@ fun FoldDepthDemo(
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = Color(0xFF10141E).copy(alpha = 0.95f),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f)),
+                border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f)),
                 shadowElevation = 12.dp,
                 modifier = Modifier
                     .clickable { showOuterPreviewExpanded = !showOuterPreviewExpanded }
@@ -304,7 +345,6 @@ fun FoldDepthDemo(
 
                     Spacer(Modifier.height(4.dp))
 
-                    // Outer Screen Content: Shows Right Half with inverted gradient blur
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -321,142 +361,146 @@ fun FoldDepthDemo(
             }
         }
 
-        // ====================================================================
-        // BOTTOM TECHNICAL HUD & DEBUG ANGLE SLIDER
-        // ====================================================================
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(24.dp),
+        // --- BOTTOM TECHNICAL HUD & DEBUG SLIDER (Visible when showUi == true) ---
+        AnimatedVisibility(
+            visible = showUi,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            // Numeric HUD readout
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Bottom,
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(24.dp),
             ) {
-                Column {
-                    Text(
-                        text = "%3.1f°".format(foldState.angle),
-                        color = Color.White,
-                        fontSize = 32.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                    Text(
-                        text = "progress: %.2f (%d%%)".format(
-                            foldState.progress,
-                            (foldState.progress * 100f).toInt(),
-                        ),
-                        color = Color.White.copy(alpha = 0.8f),
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                }
-
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = "Inner Left Blur: %.1fpx (gradient)".format(visualParams.innerLeftMaxBlurPx),
-                        color = Color(0xFF67E8F9),
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                    Text(
-                        text = "Inner Right Blur: 0.0px (crisp)",
-                        color = Color(0xFF4ADE80),
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                    Text(
-                        text = if (visualParams.isOuterScreenActive) {
-                            "Outer Display: ON (blur %.1fpx)".format(visualParams.outerBlurPx)
-                        } else {
-                            "Outer Display: OFF (angle > 90°)"
-                        },
-                        color = if (visualParams.isOuterScreenActive) Color(0xFFFBBF24) else Color.White.copy(alpha = 0.4f),
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(14.dp))
-
-            // Slider visibility
-            val isSliderVisible = !foldState.isHardwareAvailable || showHardwareOverrideSlider
-
-            if (foldState.isHardwareAvailable) {
+                // Numeric readouts
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Bottom,
                 ) {
-                    TextButton(
-                        onClick = {
-                            val newMode = !showHardwareOverrideSlider
-                            showHardwareOverrideSlider = newMode
-                            onToggleSimulation(newMode)
-                        },
-                    ) {
+                    Column {
                         Text(
-                            text = if (showHardwareOverrideSlider) "Switch to Live Sensor" else "Simulate 0°–180°",
-                            color = Color.White.copy(alpha = 0.75f),
+                            text = "%3.1f°".format(foldState.angle),
+                            color = Color.White,
+                            fontSize = 32.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                        Text(
+                            text = "progress: %.2f (%d%%) · rotY: %.1f°".format(
+                                foldState.progress,
+                                (foldState.progress * 100f).toInt(),
+                                visualParams.rotationYLeft,
+                            ),
+                            color = Color.White.copy(alpha = 0.8f),
                             fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = "Left Blur: %.1fpx (gradient)".format(visualParams.innerLeftMaxBlurPx),
+                            color = Color(0xFF67E8F9),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                        Text(
+                            text = "Right Blur: 0.0px (crisp)",
+                            color = Color(0xFF4ADE80),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                        Text(
+                            text = if (visualParams.isOuterScreenActive) {
+                                "Outer: ON (blur %.1fpx)".format(visualParams.outerBlurPx)
+                            } else {
+                                "Outer: OFF (> 90°)"
+                            },
+                            color = if (visualParams.isOuterScreenActive) Color(0xFFFBBF24) else Color.White.copy(alpha = 0.4f),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
                         )
                     }
                 }
-            }
 
-            AnimatedVisibility(
-                visible = isSliderVisible,
-                enter = fadeIn(),
-                exit = fadeOut(),
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFF141414).copy(alpha = 0.92f), RoundedCornerShape(14.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(14.dp))
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                ) {
+                Spacer(Modifier.height(14.dp))
+
+                val isSliderVisible = !foldState.isHardwareAvailable || showHardwareOverrideSlider
+
+                if (foldState.isHardwareAvailable) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        horizontalArrangement = Arrangement.End,
                     ) {
-                        Text(
-                            text = "0° (Closed)",
-                            color = Color.White.copy(alpha = 0.5f),
-                            fontSize = 11.sp,
-                        )
-                        Text(
-                            text = "Hinge Angle Simulation Slider",
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        Text(
-                            text = "180° (Flat)",
-                            color = Color.White.copy(alpha = 0.5f),
-                            fontSize = 11.sp,
+                        TextButton(
+                            onClick = {
+                                val newMode = !showHardwareOverrideSlider
+                                showHardwareOverrideSlider = newMode
+                                onToggleSimulation(newMode)
+                            },
+                        ) {
+                            Text(
+                                text = if (showHardwareOverrideSlider) "Switch to Live Sensor" else "Simulate 0°–180°",
+                                color = Color.White.copy(alpha = 0.75f),
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = isSliderVisible,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF141414).copy(alpha = 0.92f), RoundedCornerShape(14.dp))
+                            .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(14.dp))
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                text = "0° (Closed)",
+                                color = Color.White.copy(alpha = 0.5f),
+                                fontSize = 11.sp,
+                            )
+                            Text(
+                                text = "Hinge Angle Simulation Slider",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Text(
+                                text = "180° (Flat)",
+                                color = Color.White.copy(alpha = 0.5f),
+                                fontSize = 11.sp,
+                            )
+                        }
+
+                        Slider(
+                            value = foldState.angle,
+                            onValueChange = { newAngle ->
+                                if (foldState.isHardwareAvailable && !foldState.isSimulated) {
+                                    onToggleSimulation(true)
+                                }
+                                onSimulateAngleChange(newAngle)
+                            },
+                            valueRange = 0f..180f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color.White,
+                                activeTrackColor = Color(0xFF38BDF8),
+                                inactiveTrackColor = Color.White.copy(alpha = 0.2f),
+                            ),
                         )
                     }
-
-                    Slider(
-                        value = foldState.angle,
-                        onValueChange = { newAngle ->
-                            if (foldState.isHardwareAvailable && !foldState.isSimulated) {
-                                onToggleSimulation(true)
-                            }
-                            onSimulateAngleChange(newAngle)
-                        },
-                        valueRange = 0f..180f,
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color.White,
-                            activeTrackColor = Color(0xFF38BDF8),
-                            inactiveTrackColor = Color.White.copy(alpha = 0.2f),
-                        ),
-                    )
                 }
             }
         }
@@ -465,7 +509,7 @@ fun FoldDepthDemo(
 
 /**
  * Renders the Cover Screen (Outer Display):
- * 1. Displays the RIGHT HALF of the original wallpaper / screenshot.
+ * 1. Displays the RIGHT HALF of the wallpaper / screenshot.
  * 2. Inverted gradient blur: "越右越模糊" (clear near hinge on the left, blurred on the right).
  * 3. Angle-dependent sharpness: "折角越小整体越清晰" (blur reduces as angle goes from 90° down to 0°).
  */

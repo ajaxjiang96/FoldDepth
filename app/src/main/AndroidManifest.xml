@@ -5,6 +5,11 @@
         android:name="android.hardware.sensor.hinge_angle"
         android:required="false" />
 
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <application
         android:allowBackup="true"
         android:label="FoldDepth"
