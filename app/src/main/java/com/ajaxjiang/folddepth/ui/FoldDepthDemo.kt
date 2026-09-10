@@ -134,6 +134,7 @@ fun FoldDepthDemo(
                         .fillMaxSize()
                         .graphicsLayer {
                             rotationY = visualParams.rotationYLeft
+                            scaleX = visualParams.scaleXLeft
                             cameraDistance = 14f * density
                             transformOrigin = TransformOrigin(1f, 0.5f) // pivot along center hinge
                         },
@@ -179,6 +180,27 @@ fun FoldDepthDemo(
                                 modifier = Modifier.fillMaxSize(),
                             )
                         }
+                    }
+
+                    // Crease ambient shadow: subtle depth shading near the hinge as fold angle decreases
+                    if (visualParams.creaseShadowAlpha > 0.01f) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .drawWithContent {
+                                    drawContent()
+                                    drawRect(
+                                        brush = Brush.horizontalGradient(
+                                            colors = listOf(
+                                                Color.Transparent,
+                                                Color.Black.copy(alpha = visualParams.creaseShadowAlpha),
+                                            ),
+                                            startX = size.width * 0.7f,
+                                            endX = size.width,
+                                        ),
+                                    )
+                                },
+                        )
                     }
                 }
             }
@@ -287,7 +309,13 @@ fun FoldDepthDemo(
                     ) {
                         Text(
                             text = when {
-                                foldState.isHardwareAvailable && !foldState.isSimulated -> "LIVE SENSOR"
+                                foldState.isHardwareAvailable && !foldState.isSimulated -> {
+                                    if (foldState.sensorRateHz > 0) {
+                                        "LIVE SENSOR · ${foldState.sensorRateHz} Hz"
+                                    } else {
+                                        "LIVE SENSOR · FASTEST"
+                                    }
+                                }
                                 foldState.isHardwareAvailable && foldState.isSimulated -> "SIMULATED"
                                 else -> "DEBUG SLIDER"
                             },
@@ -389,10 +417,11 @@ fun FoldDepthDemo(
                             fontFamily = FontFamily.Monospace,
                         )
                         Text(
-                            text = "progress: %.2f (%d%%) · rotY: %.1f°".format(
+                            text = "progress: %.2f (%d%%) · rotY: %.1f° · stretch: %.2fx".format(
                                 foldState.progress,
                                 (foldState.progress * 100f).toInt(),
                                 visualParams.rotationYLeft,
+                                visualParams.scaleXLeft,
                             ),
                             color = Color.White.copy(alpha = 0.8f),
                             fontSize = 12.sp,
@@ -408,8 +437,12 @@ fun FoldDepthDemo(
                             fontFamily = FontFamily.Monospace,
                         )
                         Text(
-                            text = "Right Blur: 0.0px (crisp)",
-                            color = Color(0xFF4ADE80),
+                            text = if (foldState.isHardwareAvailable && !foldState.isSimulated) {
+                                "Sampling: %d Hz (0µs FASTEST)".format(foldState.sensorRateHz)
+                            } else {
+                                "Right Blur: 0.0px (crisp)"
+                            },
+                            color = if (foldState.isHardwareAvailable && !foldState.isSimulated) Color(0xFFA78BFA) else Color(0xFF4ADE80),
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace,
                         )

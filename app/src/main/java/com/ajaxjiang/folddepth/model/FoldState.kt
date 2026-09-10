@@ -9,20 +9,24 @@ import kotlin.math.pow
  * @property progress Normalized fold progress between 0f (closed) and 1f (flat).
  * @property isHardwareAvailable True if Sensor.TYPE_HINGE_ANGLE is present on the hardware.
  * @property isSimulated True if developer debug simulation is currently overriding the sensor.
+ * @property sensorRateHz Live sampling frequency (Hz) measured from the hinge angle sensor.
  */
 data class FoldState(
     val angle: Float,
     val progress: Float = (angle / 180f).coerceIn(0f, 1f),
     val isHardwareAvailable: Boolean = false,
     val isSimulated: Boolean = false,
+    val sensorRateHz: Int = 0,
 )
 
 /**
  * Derived visual effect parameters mapped directly from the physical fold state:
  *
- * 1. Inner Left Half: Gradient blur from 0 at hinge to [innerLeftMaxBlurPx] at far left edge.
- *    As angle decreases (180° -> 0°), blur increases with heavy dramatic intensity.
- *    Perspective angle [rotationYLeft] exactly matches the physical hinge rotation: -(180° - angle).
+ * 1. Inner Left Half:
+ *    - Gradient blur from 0 at hinge to [innerLeftMaxBlurPx] at far left edge.
+ *    - Softened 3D fold angle [rotationYLeft] along center crease.
+ *    - Dynamic horizontal elastic stretch [scaleXLeft] (Apple Duo-style wipe & stretch).
+ *    - Subtle ambient occlusion crease shadow [creaseShadowAlpha] near the hinge.
  * 2. Inner Right Half: Stays 100% crisp at all times (blur = 0).
  * 3. Outer Screen (Cover Display): Activates when angle <= 90°.
  *    Displays right half of the original wallpaper with inverted gradient blur.
@@ -34,6 +38,8 @@ data class FoldVisualParams(
     val isOuterScreenActive: Boolean,
     val outerBlurPx: Float,
     val rotationYLeft: Float,
+    val scaleXLeft: Float = 1.0f,
+    val creaseShadowAlpha: Float = 0f,
 )
 
 /**
@@ -62,12 +68,23 @@ fun calculateFoldVisualParams(state: FoldState): FoldVisualParams {
     // 3D folding angle: softened to half of physical fold: -((180° - angle) * 0.5f)
     val rotationYLeft = -((180f - angle) * 0.5f)
 
+    // Dynamic horizontal elastic stretch (Apple Duo-style wipe & stretch):
+    // As the panel rotates inward, stretching outward from the hinge counteracts
+    // perspective foreshortening compression and creates an organic, elastic feel.
+    val stretchIntensity = 0.22f // Up to 22% horizontal stretch at 0°
+    val scaleXLeft = 1.0f + stretchIntensity * easedClosed
+
+    // Subtle crease ambient occlusion shadow near the hinge as the angle deepens
+    val creaseShadowAlpha = 0.35f * easedClosed
+
     return FoldVisualParams(
         innerLeftMaxBlurPx = innerLeftMaxBlurPx,
         innerRightBlurPx = 0f,
         isOuterScreenActive = isOuterScreenActive,
         outerBlurPx = outerBlurPx,
         rotationYLeft = rotationYLeft,
+        scaleXLeft = scaleXLeft,
+        creaseShadowAlpha = creaseShadowAlpha,
     )
 }
 
