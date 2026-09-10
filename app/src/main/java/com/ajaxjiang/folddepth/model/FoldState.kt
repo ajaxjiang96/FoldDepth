@@ -70,9 +70,8 @@ fun calculateFoldVisualParams(state: FoldState): FoldVisualParams {
     val rotationYLeft = -((180f - angle) * 0.18f)
 
     // Dynamic horizontal elastic stretch (Apple Duo-style wipe & stretch):
-    // As the panel rotates inward, stretching outward from the hinge counteracts
-    // perspective foreshortening compression and creates an organic, elastic feel.
-    val stretchIntensity = 0.22f // Up to 22% horizontal stretch at 0°
+    // As the panel folds inward, visibly pulls and elongates the left half towards the left
+    val stretchIntensity = 0.55f // Up to 55% horizontal elongation at full fold
     val scaleXLeft = 1.0f + stretchIntensity * easedClosed
 
     // Subtle crease ambient occlusion shadow near the hinge as the angle deepens

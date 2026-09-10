@@ -66,7 +66,7 @@ fun WallpaperHalfView(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFF0D0E15)),
+            .background(if (customBitmap != null) Color.Transparent else Color(0xFF0D0E15)),
     ) {
         if (customBitmap != null) {
             // Render cropped half of custom image

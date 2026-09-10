@@ -131,7 +131,30 @@ fun FoldDepthDemo(
                     .fillMaxHeight()
                     .background(Color.Black),
             ) {
+                val verticalFeatherBrush = remember(visualParams.wipeAmount) {
+                    val featherFraction = (0.12f * visualParams.wipeAmount).coerceIn(0f, 0.2f)
+                    Brush.verticalGradient(
+                        colorStops = arrayOf(
+                            0.0f to Color.Transparent,
+                            featherFraction to Color.Black,
+                            (1.0f - featherFraction) to Color.Black,
+                            1.0f to Color.Transparent,
+                        )
+                    )
+                }
+
                 // 1. Base 3D Rotating & Stretching Wallpaper Panel
+                // Cross-fades with the blur layer so sharp pixels and sharp silhouette edges
+                // do NOT show through underneath the blur.
+                val sharpBaseAlphaStops = remember(visualParams.wipeAmount) {
+                    Array(21) { i ->
+                        val u = i / 20f // 0.0 at left, 1.0 at hinge
+                        val blurArea = calculateAppleBlurArea(u, visualParams.wipeAmount)
+                        val sharpAlpha = (1.0f - blurArea).coerceIn(0f, 1f)
+                        u to Color.Black.copy(alpha = sharpAlpha)
+                    }
+                }
+
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -140,6 +163,21 @@ fun FoldDepthDemo(
                             scaleX = visualParams.scaleXLeft
                             cameraDistance = 14f * density
                             transformOrigin = TransformOrigin(1f, 0.5f) // pivot along center hinge
+                        }
+                        .drawWithContent {
+                            drawContent()
+                            if (visualParams.wipeAmount > 0.005f) {
+                                // Fade out sharp base layer towards the left as blur takes over
+                                drawRect(
+                                    brush = Brush.horizontalGradient(colorStops = sharpBaseAlphaStops),
+                                    blendMode = BlendMode.DstIn,
+                                )
+                                // Soften top and bottom edges into black (Apple edge feathering)
+                                drawRect(
+                                    brush = verticalFeatherBrush,
+                                    blendMode = BlendMode.DstIn,
+                                )
+                            }
                         },
                 ) {
                     WallpaperHalfView(
@@ -151,8 +189,8 @@ fun FoldDepthDemo(
 
                 // 2. Hardware-accelerated Apple Non-Linear Gradient Blur Overlay
                 // STATIONARY IN SCREEN SPACE ON TOP OF ROTATION: Does NOT rotate with the panel!
-                // Driven by Apple's formula: remap(-0.25, 1.0, distance) * wipeAmount * 2.5
-                // Guarantees pure clarity near the hinge, while outer left edge bursts into heavy blur.
+                // Uses TileMode.DECAL to naturally diffuse edges outward into transparency,
+                // and vertical edge feathering so top and bottom edges are soft and atmospheric.
                 if (Build.VERSION.SDK_INT >= 31 && visualParams.innerLeftMaxBlurPx > 0.3f && visualParams.wipeAmount > 0.005f) {
                     val blurAlphaStops = remember(visualParams.wipeAmount) {
                         Array(21) { i ->
@@ -173,7 +211,7 @@ fun FoldDepthDemo(
                                     .createBlurEffect(
                                         visualParams.innerLeftMaxBlurPx,
                                         visualParams.innerLeftMaxBlurPx,
-                                        Shader.TileMode.CLAMP,
+                                        Shader.TileMode.DECAL, // Softly bleed outside boundaries into transparency!
                                     )
                                     .asComposeRenderEffect()
                             }
@@ -182,6 +220,11 @@ fun FoldDepthDemo(
                                 // Apple non-linear alpha mask in stationary screen space
                                 drawRect(
                                     brush = Brush.horizontalGradient(colorStops = blurAlphaStops),
+                                    blendMode = BlendMode.DstIn,
+                                )
+                                // Soft vertical edge feathering to dissolve top/bottom edges
+                                drawRect(
+                                    brush = verticalFeatherBrush,
                                     blendMode = BlendMode.DstIn,
                                 )
                             },
