@@ -64,64 +64,126 @@ import com.ajaxjiang.folddepth.model.calculateFoldVisualParams
 import com.ajaxjiang.folddepth.model.smoothstep
 import com.ajaxjiang.folddepth.util.MediaStoreHelper
 /**
- * AGSL Hardware Shader for True Progressive Spatial Blur & Apple Exposure Darkening.
+ * Calibrated AGSL Optical Perspective Shader (v0.2.0).
  *
- * Implements a true spatially-varying blur kernel (progressive blur):
- * 1. At center seam (x = size.x, u = 0): radius = 0.0, shade = 1.0 -> 100% bit-identical sharp base!
- * 2. Towards leftmost edge (x = 0, u = 1): radius expands dynamically with non-linear Apple curve.
- * 3. Samples 16 taps in a Vogel's Golden Angle spiral with per-pixel interleaved gradient noise jitter.
- * 4. Applies ambient exposure darkening to prevent grey fog, sinking softly into the black void.
+ * Optical perspective projection formulas and shader parameters adapted from Envl (@SesamPicr):
+ * - Project: SoloTilt (https://solotilt.com/ , formerly https://solo.gnimoay.com)
+ * - Creator: Envl (@SesamPicr on X, https://x.com/SesamPicr)
+ *
+ * Exact formulation adapted for Android AGSL:
+ * - blurAngle: pow(smoothstep(0.0, 1.570796327, tilt), 0.5) [anglePower: 0.5, fullAngle: 90°]
+ * - blurSpread: pow(smoothstep(0.0, 0.70, fromHinge), 1.45)  [distancePower: 1.45, fullDistance: 0.70]
+ * - defocus: blurAngle * blurSpread
+ * - sigma: size.x * 0.038 * defocus
+ * - eyeDistance: 2.4 * max(aspect, 1.0)
+ * - depth: fromHinge * aspect * sine
+ * - perspective: eyeDistance / (eyeDistance - depth)
+ * - imageUv.x: hinge + (uv.x - hinge) * cosine * perspective
+ * - imageUv.y: 0.5 + (uv.y - 0.5) * perspective
+ * - glass shading: 1.0 - 0.28 * sine * pow(fromHinge, 1.6)
+ * - specular reflection: exp(-pow((fromHinge - 0.70) / 0.30, 2.0)) * sine * 0.025
+ * - blackFade: clamp((fromHinge - 0.26) / 0.74, 0.0, 1.0) * 0.70 * blurAngle
  */
 private const val AGSL_PROGRESSIVE_BLUR = """
     uniform shader content;
     uniform float2 size;
-    uniform float wipeAmount;
-    uniform float maxRadius;
+    uniform float hingeAngle;
+    uniform float useShaderPerspective;
 
     float ign(float2 p) {
         return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
     }
 
     vec4 main(float2 fragCoord) {
-        // u = 0.0 at center crease seam (fragCoord.x == size.x)
-        // u = 1.0 at leftmost screen edge (fragCoord.x == 0.0)
-        float u = clamp(1.0 - (fragCoord.x / size.x), 0.0, 1.0);
-
-        // Apple Duo spatial blur radius curve:
-        // Pure clarity at crease seam, dynamic spatial dispersion towards the left
-        float radius = maxRadius * wipeAmount * pow(u, 1.35);
-
-        // Apple ambient exposure darkening:
-        // Strictly 1.0 (no darkening) at seam, sinks into pure black void at left
-        float shade = clamp(1.0 - 0.70 * wipeAmount * pow(u, 1.15), 0.0, 1.0);
-
-        // Fast path near hinge (zero blur)
-        if (radius < 0.5) {
-            vec4 base = content.eval(fragCoord);
-            return vec4(base.rgb * shade, base.a);
+        float turn = clamp((180.0 - hingeAngle) / 90.0, 0.0, 1.0);
+        if (turn <= 0.0001) {
+            return content.eval(fragCoord);
         }
 
-        // 16-tap Vogel's Golden Angle spiral with per-pixel rotation jitter
-        const int SAMPLES = 16;
-        const float GOLDEN_ANGLE = 2.39996323;
-        float jitter = ign(fragCoord) * 6.283185;
+        vec2 uv = fragCoord / size;
+        float hinge = 1.0;
+        float fromHinge = clamp(1.0 - uv.x, 0.0, 1.0);
 
-        vec4 sum = vec4(0.0);
-        float totalWeight = 0.0;
+        // Physical fold tilt: 0 to PI/2 (90°)
+        float tilt = turn * 1.570796327;
+        float cosine = max(0.0, cos(tilt));
+        float sine = sin(tilt);
 
-        for (int i = 0; i < 16; i++) {
-            float fi = float(i);
-            float r = sqrt((fi + 0.5) / 16.0) * radius;
-            float theta = fi * GOLDEN_ANGLE + jitter;
-            float2 offset = float2(cos(theta), sin(theta)) * r;
+        // Camera perspective parameters (Solo):
+        float aspect = size.x / size.y;
+        float eyeDistance = 2.4 * max(aspect, 1.0);
+        float depth = fromHinge * aspect * sine;
+        float perspective = eyeDistance / max(eyeDistance - depth, 0.001);
 
-            float weight = 1.0 - (r / (radius + 0.01)) * 0.5;
-            sum += content.eval(fragCoord + offset) * weight;
-            totalWeight += weight;
+        vec2 imageUv;
+        if (useShaderPerspective > 0.5) {
+            imageUv.x = hinge + (uv.x - hinge) * cosine * perspective;
+            imageUv.y = 0.5 + (uv.y - 0.5) * perspective;
+        } else {
+            imageUv = uv;
         }
 
-        vec4 blurred = sum / totalWeight;
-        return vec4(blurred.rgb * shade, blurred.a);
+        // Solo blur parameters:
+        // Angle response: pow(..., 0.5)
+        // Spread response: pow(..., 1.45) with fullDistance = 0.70
+        float blurAngle = pow(smoothstep(0.0, 1.570796327, tilt), 0.5);
+        float blurSpread = pow(smoothstep(0.0, 0.70, fromHinge), 1.45);
+        float defocus = blurAngle * blurSpread;
+        float sigma = size.x * 0.038 * defocus;
+
+        // Vertical margin softness and mask (Solo trapezoid margins):
+        float verticalMask = 1.0;
+        if (useShaderPerspective > 0.5) {
+            float pixelY = 1.0 / size.y;
+            float marginSoftness = pixelY + 2.0 * sigma / size.y;
+            verticalMask = 1.0 - smoothstep(0.5 - marginSoftness, 0.5 + marginSoftness, abs(imageUv.y - 0.5));
+            if (verticalMask <= 0.0) {
+                return vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+
+        // Sample content with Vogel golden spiral:
+        vec4 baseSample;
+        vec2 centerSampleCoord = clamp(imageUv, 0.0, 1.0) * size;
+
+        if (sigma < 0.5) {
+            baseSample = content.eval(centerSampleCoord);
+        } else {
+            const int SAMPLES = 16;
+            const float GOLDEN_ANGLE = 2.39996323;
+            float jitter = ign(fragCoord) * 6.283185;
+
+            vec4 sum = vec4(0.0);
+            float totalWeight = 0.0;
+
+            for (int i = 0; i < 16; i++) {
+                float fi = float(i);
+                float r = sqrt((fi + 0.5) / 16.0) * sigma;
+                float theta = fi * GOLDEN_ANGLE + jitter;
+                vec2 offset = vec2(cos(theta), sin(theta)) * r;
+
+                float weight = 1.0 - (r / (sigma + 0.01)) * 0.5;
+                vec2 samplePos = clamp((centerSampleCoord + offset) / size, 0.0, 1.0) * size;
+                sum += content.eval(samplePos) * weight;
+                totalWeight += weight;
+            }
+            baseSample = sum / totalWeight;
+        }
+
+        // Solo glass ambient shading:
+        float glass = sine * pow(fromHinge, 1.6);
+        baseSample.rgb *= 1.0 - 0.28 * glass;
+
+        // Solo specular glass reflection sheen:
+        float reflection = exp(-pow((fromHinge - 0.70) / 0.30, 2.0)) * sine;
+        baseSample.rgb += vec3(0.82, 0.85, 0.86) * reflection * 0.025;
+
+        // Solo black gradient fade (starts at 0.26 from hinge, max 0.70 opacity):
+        float blackFade = clamp((fromHinge - 0.26) / 0.74, 0.0, 1.0);
+        baseSample.rgb *= 1.0 - 0.70 * blurAngle * blackFade;
+
+        vec3 dark = vec3(0.0, 0.0, 0.0);
+        return vec4(mix(dark, baseSample.rgb, verticalMask), 1.0);
     }
 """
 
@@ -146,6 +208,7 @@ fun FoldDepthDemo(
     var showUi by remember { mutableStateOf(false) }
     var showHardwareOverrideSlider by remember { mutableStateOf(false) }
     var showOuterPreviewExpanded by remember { mutableStateOf(false) }
+    var useSoloPerspective by remember { mutableStateOf(true) }
 
     val agslShader = remember {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -197,30 +260,32 @@ fun FoldDepthDemo(
                     .weight(1f)
                     .fillMaxHeight()
                     .background(Color.Black)
-                    // AGSL True Progressive Spatial Blur & Exposure Darkening:
-                    // Stationed on display glass (in screen space) so the 3D surface rotates into the blur
+                    // Solo (solo.gnimoay.com) Calibrated AGSL Shader:
+                    // Stationed on display glass (in screen space)
                     .graphicsLayer {
-                        val wipeAmount = visualParams.wipeAmount
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && agslShader != null && wipeAmount > 0.005f) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && agslShader != null && foldState.angle < 179.9f) {
                             agslShader.setFloatUniform("size", size.width, size.height)
-                            agslShader.setFloatUniform("wipeAmount", wipeAmount)
-                            agslShader.setFloatUniform("maxRadius", 50f)
+                            agslShader.setFloatUniform("hingeAngle", foldState.angle)
+                            agslShader.setFloatUniform("useShaderPerspective", if (useSoloPerspective) 1.0f else 0.0f)
                             renderEffect = RenderEffect
                                 .createRuntimeShaderEffect(agslShader, "content")
                                 .asComposeRenderEffect()
                         }
                     },
             ) {
-                // Unified rotating & stretching panel:
-                // Rotates in 3D around hinge seam and stretches horizontally with physical elastic model
+                // Inner content panel:
+                // When useSoloPerspective is true, the shader computes exact ray perspective & stretch!
+                // When false, Compose 3D rotation & stretch are applied.
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer {
-                            rotationY = visualParams.rotationYLeft
-                            scaleX = visualParams.scaleXLeft
-                            cameraDistance = 14f * density
-                            transformOrigin = TransformOrigin(1f, 0.5f) // pivot along center hinge
+                            if (!useSoloPerspective) {
+                                rotationY = visualParams.rotationYLeft
+                                scaleX = visualParams.scaleXLeft
+                                cameraDistance = 14f * density
+                                transformOrigin = TransformOrigin(1f, 0.5f) // pivot along center hinge
+                            }
                         },
                 ) {
                     WallpaperHalfView(
@@ -459,6 +524,22 @@ fun FoldDepthDemo(
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                         )
+                        Spacer(Modifier.height(4.dp))
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (useSoloPerspective) Color(0xFF2563EB).copy(alpha = 0.7f) else Color.White.copy(alpha = 0.15f),
+                            border = BorderStroke(1.dp, if (useSoloPerspective) Color(0xFF60A5FA) else Color.White.copy(alpha = 0.2f)),
+                            modifier = Modifier.clickable { useSoloPerspective = !useSoloPerspective },
+                        ) {
+                            Text(
+                                text = if (useSoloPerspective) "Mode: Solo Ray-Traced (Active)" else "Mode: Compose 3D Matrix",
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
                     }
 
                     Column(horizontalAlignment = Alignment.End) {

@@ -30,22 +30,14 @@ The unfolded display is split down the center crease:
 - **Right Half (Stationary Anchor)**:
   - Remains **100% crisp and unblurred** at all times (`blur = 0px`, `scaleX = 1.0x`).
 - **Left Half (Pivoting Depth Surface)**:
-  - **Native AGSL Progressive Spatial Blur (Android 13+ / API 33+)**:
-    - Powered by `android.graphics.RuntimeShader` and `RenderEffect.createRuntimeShaderEffect`.
-    - **Center Seam**: Blur radius is strictly $0\text{px}$ (single-sample fast path, 100% bit-identical to the right half).
-    - **Outer Left Edge**: Radius expands dynamically using a non-linear diffusion curve.
-    - Sampled via a **16-Tap Vogel's Golden Angle Spiral** with per-pixel Interleaved Gradient Noise (IGN) jitter to eliminate banding.
-  - **Apple Ambient Exposure Darkening**:
-    - Rather than washed-out grey fog, heavily blurred pixels sink naturally into the pure black background void.
-  - **Keyframed Elastic Horizontal Stretch**:
-    - **$180^\circ$ (Flat)**: $1.0\times$ (normal 1:1 aspect ratio)
-    - **$130^\circ$**: $1.5\times$
-    - **$115^\circ$**: $2.0\times$
-    - **$100^\circ$**: $3.0\times$
-    - **$0^\circ$ (Closed)**: $3.6\times$
-    - Smoothly interpolated via a Monotonic Cubic Hermite Spline (PCHIP) anchored at `TransformOrigin(1f, 0.5f)` so the center seam never moves.
-  - **Subtle 3D Perspective Rotation**:
-    - Left half rotates inward along the center hinge axis (`rotationYLeft = -(180° - angle) * 0.36f`).
+  - **Ray-Traced Optical Perspective (v0.2.0 - Native AGSL RuntimeShader)**:
+    - **Camera Ray Projection**: Computes analytic camera ray intersection per pixel ($uv_{\text{proj}}.x = 1.0 + (uv.x - 1.0) \cdot \cos\theta \cdot \text{perspective}$), producing physics-based horizontal elastic stretching and 3D trapezoid vertical perspective compression without mesh distortions.
+    - **Defocus Diffusion**: Powered by a square-root angular response ($\text{tilt}^{0.5}$) and power-$1.45$ distance spread reaching full diffusion at $70\%$ screen width.
+    - **Center Seam Invariant**: Blur radius and darkening are strictly $0$ at the center crease ($26\%$ brightness deadband), ensuring the left panel joins the right panel seamlessly without seam boundaries or color steps.
+    - **Glass Shading & Specular Sheen**: Simulates curved glass depth with ambient falloff and a subtle Gaussian specular reflection band at $70\%$ distance.
+    - Sampled via a **16-Tap Vogel's Golden Angle Spiral** with per-pixel Interleaved Gradient Noise (IGN) jitter.
+  - **Live Mode Toggle in Diagnostic HUD**:
+    - Tap anywhere on screen to toggle the diagnostic HUD, allowing instant side-by-side comparison between **`Mode: Solo Ray-Traced (Active)`** and **`Mode: Compose 3D Matrix`**.
 
 > [!NOTE]
 > **Outer Screen Status**:
@@ -65,8 +57,18 @@ The unfolded display is split down the center crease:
 
 Ready-to-install signed APKs are available directly in [GitHub Releases](https://github.com/ajaxjiang96/FoldDepth/releases):
 
+- [**Download FoldDepth-v0.2.0.apk** (Latest)](https://github.com/ajaxjiang96/FoldDepth/releases/download/v0.2.0/FoldDepth-v0.2.0.apk)
+  - **v0.2.0**: Integrated ray-projected optical perspective shader, square-root angular blur, glass ambient shading & specular reflection.
 - [**Download FoldDepth-v0.1.0.apk**](https://github.com/ajaxjiang96/FoldDepth/releases/download/v0.1.0/FoldDepth-v0.1.0.apk)
-  - Signed with debug keystore: directly installable on any Android 13+ device (`adb install` or tap to install).
+  - Initial working release with hardware hinge polling and monotonic spline stretch.
+
+---
+
+## Credits & Acknowledgments
+
+Special thanks to **Envl** ([@SesamPicr](https://x.com/SesamPicr)) for the brilliant optical perspective formulas and shader calibration demonstrated in [SoloTilt](https://solotilt.com/) (formerly `solo.gnimoay.com`). 
+
+Starting in **v0.2.0**, FoldDepth adapts Envl's ray-projected camera perspective equations, angle/distance diffusion curves, and glass shading models into native Android AGSL (`RuntimeShader`), driving genuine hardware-sensor-driven depth rendering on physical foldable devices.
 
 ---
 
