@@ -3,11 +3,11 @@
 An experimental Android foldable interaction prototype where the physical hinge angle directly drives asymmetrical depth-of-field.
 
 <div align="center">
-  <a href="https://youtu.be/vEq8UMa20Ag">
-    <img src="https://img.youtube.com/vi/vEq8UMa20Ag/maxresdefault.jpg" alt="FoldDepth - iPhone Duo flip animation recreated on Android foldable" width="850">
+  <a href="https://youtu.be/Hr8peOP33ko">
+    <img src="https://img.youtube.com/vi/Hr8peOP33ko/maxresdefault.jpg" alt="FoldDepth - iPhone Duo flip animation recreated on Android foldable" width="850">
   </a>
   <p>
-    <a href="https://youtu.be/vEq8UMa20Ag"><b>▶ Watch Real-Device Demo on YouTube: <i>"I’ve recreated the iPhone Duo flip animation on android foldable"</i></b></a>
+    <a href="https://youtu.be/Hr8peOP33ko"><b>▶ Watch Real-Device Demo on YouTube: <i>"I’ve recreated the iPhone Duo flip animation on android foldable"</i></b></a>
   </p>
 </div>
 
